@@ -1,0 +1,19 @@
+{
+  "name": "grid-solver-native",
+  "version": "1.0.0",
+  "description": "C++ 电网潮流计算核心模块 (N-API 绑定)",
+  "main": "index.js",
+  "scripts": {
+    "install": "cmake-js compile",
+    "build": "cmake-js compile",
+    "rebuild": "cmake-js rebuild",
+    "build:debug": "cmake-js compile -D"
+  },
+  "dependencies": {
+    "node-addon-api": "^7.1.0",
+    "bindings": "^1.5.0"
+  },
+  "devDependencies": {
+    "cmake-js": "^7.3.0"
+  }
+}

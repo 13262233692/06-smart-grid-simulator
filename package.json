@@ -1,0 +1,21 @@
+{
+  "name": "smart-grid-simulator",
+  "version": "1.0.0",
+  "description": "电网拓扑与潮流计算桌面应用 - 电力调度中心仿真系统",
+  "main": "frontend/dist-electron/main/index.js",
+  "author": "Smart Grid Simulator Team",
+  "license": "MIT",
+  "scripts": {
+    "install:native": "cd native && npm install",
+    "build:native": "cd native && npm run build",
+    "rebuild:native": "cd native && npm run rebuild",
+    "dev": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "preview": "cd frontend && npm run preview",
+    "postinstall": "npm run install:native"
+  },
+  "devDependencies": {
+    "node-gyp": "^10.0.1",
+    "cmake-js": "^7.3.0"
+  }
+}
