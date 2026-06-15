@@ -2,9 +2,19 @@
 #include <napi.h>
 #include "core/GridData.h"
 #include "solver/NewtonRaphsonSolver.h"
+#include <mutex>
+#include <memory>
 
 namespace GridSolver {
 namespace Binding {
+
+struct SharedSolverState {
+    std::mutex mutex;
+    NewtonRaphsonSolver solver;
+    CancellationToken token;
+    std::atomic<uint64_t> activeRequestId{0};
+    std::atomic<bool> computing{false};
+};
 
 class GridSolverWrapper : public Napi::ObjectWrap<GridSolverWrapper> {
 public:
@@ -16,14 +26,16 @@ private:
 
     GridData m_gridData;
     bool m_gridLoaded;
+    std::shared_ptr<SharedSolverState> m_solverState;
 
     Napi::Value LoadCDF(const Napi::CallbackInfo& info);
     Napi::Value SolvePowerFlow(const Napi::CallbackInfo& info);
     Napi::Value SolveWithModifications(const Napi::CallbackInfo& info);
     Napi::Value GetGridInfo(const Napi::CallbackInfo& info);
     Napi::Value IsGridLoaded(const Napi::CallbackInfo& info);
+    Napi::Value CancelComputation(const Napi::CallbackInfo& info);
+    Napi::Value IsComputing(const Napi::CallbackInfo& info);
 
-    Napi::Value LoadCDFAsync(const Napi::CallbackInfo& info);
     Napi::Value SolvePowerFlowAsync(const Napi::CallbackInfo& info);
     Napi::Value SolveWithModificationsAsync(const Napi::CallbackInfo& info);
 

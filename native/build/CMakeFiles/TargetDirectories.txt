@@ -1,0 +1,3 @@
+D:/SOLO-12/06-smart-grid-simulator/native/build/CMakeFiles/grid-solver-native.dir
+D:/SOLO-12/06-smart-grid-simulator/native/build/CMakeFiles/ALL_BUILD.dir
+D:/SOLO-12/06-smart-grid-simulator/native/build/CMakeFiles/ZERO_CHECK.dir

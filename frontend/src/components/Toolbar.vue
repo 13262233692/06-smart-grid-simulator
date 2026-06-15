@@ -19,7 +19,7 @@
 
     <div class="divider"></div>
 
-    <button class="btn-success" :disabled="!store.isLoaded || store.loading" @click="onSolve">
+    <button class="btn-success" :disabled="!store.isLoaded || store.loading || store.computing" @click="onSolve">
       <span style="margin-right:6px;">⚡</span>
       潮流计算
     </button>
@@ -64,7 +64,8 @@ import { useGridStore } from '../stores/grid'
 const store = useGridStore()
 
 const statusText = computed(() => {
-  if (store.loading) return '计算中...'
+  if (store.computing) return '计算中...'
+  if (store.loading) return '加载中...'
   if (store.error) return '错误'
   if (store.isSolved && store.solution?.converged) return '已收敛'
   if (store.isSolved && !store.solution?.converged) return '未收敛'
@@ -73,7 +74,7 @@ const statusText = computed(() => {
 })
 
 const statusBadgeClass = computed(() => {
-  if (store.loading) return 'badge-info'
+  if (store.computing || store.loading) return 'badge-info'
   if (store.error) return 'badge-danger'
   if (store.isSolved && store.solution?.converged) return 'badge-success'
   if (store.isSolved && !store.solution?.converged) return 'badge-warning'

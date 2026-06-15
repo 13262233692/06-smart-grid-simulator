@@ -3,7 +3,6 @@
 #include <chrono>
 #include <algorithm>
 #include <stdexcept>
-#include <iostream>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -13,6 +12,25 @@ namespace GridSolver {
 
 NewtonRaphsonSolver::NewtonRaphsonSolver() {}
 NewtonRaphsonSolver::~NewtonRaphsonSolver() {}
+
+bool NewtonRaphsonSolver::checkToken(CancellationToken* token) const {
+    if (!token) return false;
+    return token->shouldStop();
+}
+
+void NewtonRaphsonSolver::reportProgress(
+    ProgressCallback progress, int iter, int maxIter,
+    double mismatch, double tol, double elapsed
+) const {
+    if (!progress) return;
+    IterationProgress p;
+    p.currentIteration = iter;
+    p.maxIterations = maxIter;
+    p.maxMismatch = mismatch;
+    p.tolerance = tol;
+    p.elapsedMs = elapsed;
+    progress(p);
+}
 
 void NewtonRaphsonSolver::buildYbus(const GridData& grid, std::vector<std::vector<Complex>>& Ybus) {
     int n = grid.nBus();
@@ -61,12 +79,9 @@ void NewtonRaphsonSolver::buildJacobian(
 
     std::vector<int> nonSlackIdx;
     std::vector<int> pqIdx;
-    std::vector<int> slackIdx;
 
     for (int k = 0; k < n; k++) {
-        if (buses[k].type == BusType::SLACK) {
-            slackIdx.push_back(k);
-        } else {
+        if (buses[k].type != BusType::SLACK) {
             nonSlackIdx.push_back(k);
         }
         if (buses[k].type == BusType::PQ) {
@@ -80,16 +95,6 @@ void NewtonRaphsonSolver::buildJacobian(
 
     J.assign(nUnknown, Vector(nUnknown, 0.0));
     mismatch.assign(nUnknown, 0.0);
-
-    std::vector<int> rowOfBus(n, -1);
-    for (int r = 0; r < nNonSlack; r++) {
-        rowOfBus[nonSlackIdx[r]] = r;
-    }
-
-    std::vector<int> vcolOfBus(n, -1);
-    for (int c = 0; c < nPQ; c++) {
-        vcolOfBus[pqIdx[c]] = nNonSlack + c;
-    }
 
     for (int ri = 0; ri < nNonSlack; ri++) {
         int i = nonSlackIdx[ri];
@@ -345,7 +350,12 @@ void NewtonRaphsonSolver::calculateBranchFlows(
     }
 }
 
-PowerFlowSolution NewtonRaphsonSolver::solve(const GridData& grid, const SolverConfig& config) {
+PowerFlowSolution NewtonRaphsonSolver::solve(
+    const GridData& grid,
+    const SolverConfig& config,
+    CancellationToken* token,
+    ProgressCallback progress
+) {
     auto startTime = std::chrono::high_resolution_clock::now();
 
     PowerFlowSolution solution;
@@ -353,112 +363,147 @@ PowerFlowSolution NewtonRaphsonSolver::solve(const GridData& grid, const SolverC
     solution.iterations = 0;
     solution.tolerance = config.tolerance;
 
+    uint64_t requestId = 0;
+
     try {
-        std::vector<Bus> buses = grid.buses;
-        std::vector<std::vector<Complex>> Ybus;
-        buildYbus(grid, Ybus);
-
-        int n = grid.nBus();
-        std::vector<int> nonSlackIdx;
-        std::vector<int> pqIdx;
-
-        for (int k = 0; k < n; k++) {
-            if (buses[k].type != BusType::SLACK) {
-                nonSlackIdx.push_back(k);
-            }
-            if (buses[k].type == BusType::PQ) {
-                pqIdx.push_back(k);
-            }
+        if (token) {
+            token->throwIfCancelled();
         }
 
-        int nNonSlack = static_cast<int>(nonSlackIdx.size());
-        int nPQ = static_cast<int>(pqIdx.size());
+        requestId = m_state.beginComputation();
+        m_state.resetCancellationToken(config.timeoutMs);
 
-        for (int iter = 0; iter < config.maxIterations; iter++) {
-            solution.iterations = iter + 1;
+        {
+            ComputationGuard guard(m_state.resultMutex(), m_state.cancellationToken());
 
-            Matrix J;
-            Vector mismatch;
-            buildJacobian(grid, buses, Ybus, J, mismatch);
-
-            if (J.empty() || mismatch.empty()) {
-                solution.converged = true;
-                break;
+            if (token) {
+                token->throwIfCancelled();
             }
 
-            double maxMismatch = 0.0;
-            for (double m : mismatch) {
-                maxMismatch = std::max(maxMismatch, std::abs(m));
+            std::vector<Bus> buses = grid.buses;
+            std::vector<std::vector<Complex>> Ybus;
+            buildYbus(grid, Ybus);
+
+            if (token) token->throwIfCancelled();
+
+            int n = grid.nBus();
+            std::vector<int> nonSlackIdx;
+            std::vector<int> pqIdx;
+
+            for (int k = 0; k < n; k++) {
+                if (buses[k].type != BusType::SLACK) {
+                    nonSlackIdx.push_back(k);
+                }
+                if (buses[k].type == BusType::PQ) {
+                    pqIdx.push_back(k);
+                }
             }
 
-            if (maxMismatch < config.tolerance) {
-                solution.converged = true;
-                break;
-            }
+            int nNonSlack = static_cast<int>(nonSlackIdx.size());
+            int nPQ = static_cast<int>(pqIdx.size());
 
-            Vector dx;
-            if (!solveLinearSystem(J, mismatch, dx)) {
-                solution.errorMessage = "Singular Jacobian matrix at iteration " + std::to_string(iter + 1);
-                break;
-            }
-
-            for (int k = 0; k < nNonSlack; k++) {
-                buses[nonSlackIdx[k]].Va += dx[k];
-            }
-            for (int k = 0; k < nPQ; k++) {
-                buses[pqIdx[k]].Vm += dx[nNonSlack + k];
-            }
-
-            for (auto& bus : buses) {
-                bus.Vm = std::max(bus.VmMin, std::min(bus.VmMax, bus.Vm));
-            }
-        }
-
-        solution.buses = buses;
-        solution.branches = grid.branches;
-        solution.generators = grid.generators;
-
-        for (auto& bus : solution.buses) {
-            bus.Pg = 0;
-            bus.Qg = 0;
-        }
-
-        for (const auto& gen : grid.generators) {
-            for (auto& bus : solution.buses) {
-                if (bus.id == gen.busId) {
-                    bus.Pg = gen.Pg;
+            for (int iter = 0; iter < config.maxIterations; iter++) {
+                if (token) token->throwIfCancelled();
+                if (m_state.isStaleRequest(requestId)) {
+                    solution.errorMessage = "Superseded by newer request";
+                    solution.converged = false;
                     break;
                 }
-            }
-        }
 
-        for (size_t k = 0; k < solution.buses.size(); k++) {
-            if (solution.buses[k].type == BusType::SLACK || solution.buses[k].type == BusType::PV) {
-                double Vk = solution.buses[k].Vm;
-                double thetak = solution.buses[k].Va;
-                double Pcalc = 0.0, Qcalc = 0.0;
-                for (size_t m = 0; m < solution.buses.size(); m++) {
-                    double Vm = solution.buses[m].Vm;
-                    double theta_m = solution.buses[m].Va;
-                    double dTheta = thetak - theta_m;
-                    double Gkm = Ybus[k][m].real();
-                    double Bkm = Ybus[k][m].imag();
-                    Pcalc += Vk * Vm * (Gkm * cos(dTheta) + Bkm * sin(dTheta));
-                    Qcalc += Vk * Vm * (Gkm * sin(dTheta) - Bkm * cos(dTheta));
-                }
-                if (solution.buses[k].type == BusType::SLACK) {
-                    solution.buses[k].Pg = Pcalc * grid.baseMVA + solution.buses[k].Pd;
-                }
-                solution.buses[k].Qg = Qcalc * grid.baseMVA + solution.buses[k].Qd;
-            }
-        }
+                solution.iterations = iter + 1;
 
-        calculateBranchFlows(grid, solution.buses, Ybus, solution);
+                Matrix J;
+                Vector mismatch;
+                buildJacobian(grid, buses, Ybus, J, mismatch);
+
+                if (J.empty() || mismatch.empty()) {
+                    solution.converged = true;
+                    break;
+                }
+
+                double maxMismatch = 0.0;
+                for (double m : mismatch) {
+                    maxMismatch = std::max(maxMismatch, std::abs(m));
+                }
+
+                auto iterTime = std::chrono::high_resolution_clock::now();
+                double iterElapsed = std::chrono::duration<double, std::milli>(iterTime - startTime).count();
+                reportProgress(progress, iter + 1, config.maxIterations, maxMismatch, config.tolerance, iterElapsed);
+
+                if (maxMismatch < config.tolerance) {
+                    solution.converged = true;
+                    break;
+                }
+
+                Vector dx;
+                if (!solveLinearSystem(J, mismatch, dx)) {
+                    solution.errorMessage = "Singular Jacobian matrix at iteration " + std::to_string(iter + 1);
+                    break;
+                }
+
+                for (int k = 0; k < nNonSlack; k++) {
+                    buses[nonSlackIdx[k]].Va += dx[k];
+                }
+                for (int k = 0; k < nPQ; k++) {
+                    buses[pqIdx[k]].Vm += dx[nNonSlack + k];
+                }
+
+                for (auto& bus : buses) {
+                    bus.Vm = std::max(bus.VmMin, std::min(bus.VmMax, bus.Vm));
+                }
+            }
+
+            if (token) token->throwIfCancelled();
+
+            solution.buses = buses;
+            solution.branches = grid.branches;
+            solution.generators = grid.generators;
+
+            for (auto& bus : solution.buses) {
+                bus.Pg = 0;
+                bus.Qg = 0;
+            }
+
+            for (const auto& gen : grid.generators) {
+                for (auto& bus : solution.buses) {
+                    if (bus.id == gen.busId) {
+                        bus.Pg = gen.Pg;
+                        break;
+                    }
+                }
+            }
+
+            for (size_t k = 0; k < solution.buses.size(); k++) {
+                if (solution.buses[k].type == BusType::SLACK || solution.buses[k].type == BusType::PV) {
+                    double Vk = solution.buses[k].Vm;
+                    double thetak = solution.buses[k].Va;
+                    double Pcalc = 0.0, Qcalc = 0.0;
+                    for (size_t m = 0; m < solution.buses.size(); m++) {
+                        double Vm = solution.buses[m].Vm;
+                        double theta_m = solution.buses[m].Va;
+                        double dTheta = thetak - theta_m;
+                        double Gkm = Ybus[k][m].real();
+                        double Bkm = Ybus[k][m].imag();
+                        Pcalc += Vk * Vm * (Gkm * cos(dTheta) + Bkm * sin(dTheta));
+                        Qcalc += Vk * Vm * (Gkm * sin(dTheta) - Bkm * cos(dTheta));
+                    }
+                    if (solution.buses[k].type == BusType::SLACK) {
+                        solution.buses[k].Pg = Pcalc * grid.baseMVA + solution.buses[k].Pd;
+                    }
+                    solution.buses[k].Qg = Qcalc * grid.baseMVA + solution.buses[k].Qd;
+                }
+            }
+
+            calculateBranchFlows(grid, solution.buses, Ybus, solution);
+
+        }
 
     } catch (const std::exception& e) {
         solution.errorMessage = e.what();
         solution.converged = false;
     }
+
+    m_state.endComputation();
 
     auto endTime = std::chrono::high_resolution_clock::now();
     solution.elapsedMs = std::chrono::duration<double, std::milli>(endTime - startTime).count();
@@ -470,7 +515,9 @@ PowerFlowSolution NewtonRaphsonSolver::solveWithModifications(
     const GridData& grid,
     const SolverConfig& config,
     const std::vector<std::pair<int, double>>& genPowerChanges,
-    const std::vector<std::pair<int, double>>& transformerTapChanges
+    const std::vector<std::pair<int, double>>& transformerTapChanges,
+    CancellationToken* token,
+    ProgressCallback progress
 ) {
     GridData modifiedGrid = grid;
 
@@ -497,7 +544,7 @@ PowerFlowSolution NewtonRaphsonSolver::solveWithModifications(
         }
     }
 
-    return solve(modifiedGrid, config);
+    return solve(modifiedGrid, config, token, progress);
 }
 
 } // namespace GridSolver

@@ -82,9 +82,9 @@ void CDFParser::parseTitleData(GridData& grid, const std::string& line) {
     if (grid.baseMVA <= 0) grid.baseMVA = 100.0;
 }
 
-void CDFParser::parseBusData(GridData& grid, std::ifstream& file) {
+void CDFParser::parseBusData(GridData& grid, std::istream& stream) {
     std::string line;
-    while (std::getline(file, line)) {
+    while (std::getline(stream, line)) {
         if (line.find("-999") != std::string::npos) break;
         if (trim(line).empty()) continue;
         if (line.size() < 100) continue;
@@ -154,10 +154,10 @@ void CDFParser::parseBusData(GridData& grid, std::ifstream& file) {
     }
 }
 
-void CDFParser::parseBranchData(GridData& grid, std::ifstream& file) {
+void CDFParser::parseBranchData(GridData& grid, std::istream& stream) {
     std::string line;
     int branchId = 0;
-    while (std::getline(file, line)) {
+    while (std::getline(stream, line)) {
         if (line.find("-999") != std::string::npos) break;
         if (trim(line).empty()) continue;
         if (line.size() < 60) continue;
@@ -167,8 +167,8 @@ void CDFParser::parseBranchData(GridData& grid, std::ifstream& file) {
             branch.id = ++branchId;
             branch.fromBus = std::stoi(trim(line.substr(0, 4)));
             branch.toBus = std::stoi(trim(line.substr(5, 4)));
-            branch.area = std::stoi(trim(line.substr(9, 3)));
-            branch.zone = std::stoi(trim(line.substr(12, 3)));
+            branch.area = line.size() >= 12 ? std::stoi(trim(line.substr(9, 3))) : 0;
+            branch.zone = line.size() >= 15 ? std::stoi(trim(line.substr(12, 3))) : 0;
 
             branch.r = std::stod(trim(line.substr(15, 9)));
             branch.x = std::stod(trim(line.substr(24, 9)));

@@ -46,6 +46,8 @@ struct Branch {
     int id;
     int fromBus;
     int toBus;
+    int area;
+    int zone;
 
     double r;
     double x;

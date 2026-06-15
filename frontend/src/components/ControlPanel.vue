@@ -4,6 +4,20 @@
       <span>⚙️ 控制面板</span>
     </div>
 
+    <div v-if="store.computing" class="computation-status">
+      <div class="progress-bar-container">
+        <div class="progress-bar" :style="{ width: store.progressPercent + '%' }"></div>
+      </div>
+      <div class="progress-info">
+        <span v-if="store.computationProgress">
+          迭代 {{ store.computationProgress.currentIteration }}/{{ store.computationProgress.maxIterations }}
+          · 失配 {{ store.computationProgress.maxMismatch?.toExponential(2) }}
+        </span>
+        <span v-else>计算中...</span>
+        <button class="btn-cancel" @click="store.cancelComputation()">取消</button>
+      </div>
+    </div>
+
     <div v-if="!store.isLoaded" class="panel-body empty-state">
       <div class="empty-icon">📊</div>
       <h3>尚未加载电网数据</h3>
@@ -33,6 +47,16 @@
               max="200"
               :value="store.solverConfig.maxIterations"
               @change="(e) => store.solverConfig.maxIterations = parseInt(e.target.value)"
+            />
+          </div>
+          <div class="input-group">
+            <label>超时时间 (ms)</label>
+            <input
+              type="number"
+              min="1000"
+              step="1000"
+              :value="store.solverConfig.timeoutMs"
+              @change="(e) => store.solverConfig.timeoutMs = parseInt(e.target.value)"
             />
           </div>
         </div>
@@ -69,8 +93,8 @@
                 :max="gen.PgMax"
                 :step="0.5"
                 :value="genCurrentPg(gen, idx)"
-                @input="(e) => onGenPowerChange(idx, gen, parseFloat(e.target.value))"
-                @change="(e) => applyGenPowerChange(idx, gen, parseFloat(e.target.value))"
+                @input="(e) => onGenPowerInput(idx, gen, parseFloat(e.target.value))"
+                @change="(e) => onGenPowerChange(idx, gen, parseFloat(e.target.value))"
               />
               <span class="value">{{ genCurrentPg(gen, idx).toFixed(1) }}</span>
             </div>
@@ -112,11 +136,11 @@
                 :min="tr.ratioMin"
                 :max="tr.ratioMax"
                 step="0.005"
-                :value="trCurrentTap(tr, getBranchIndex(tr.id))"
-                @input="(e) => onTapChange(getBranchIndex(tr.id), tr, parseFloat(e.target.value))"
-                @change="(e) => applyTapChange(getBranchIndex(tr.id), tr, parseFloat(e.target.value))"
+                :value="trCurrentTap(tr, idx)"
+                @input="(e) => onTapInput(idx, tr, parseFloat(e.target.value))"
+                @change="(e) => onTapChange(idx, tr, parseFloat(e.target.value))"
               />
-              <span class="value">{{ trCurrentTap(tr, getBranchIndex(tr.id)).toFixed(3) }}</span>
+              <span class="value">{{ trCurrentTap(tr, idx).toFixed(3) }}</span>
             </div>
             <div class="transformer-limits">
               <span>Min: {{ tr.ratioMin }}</span>
@@ -126,16 +150,20 @@
         </div>
       </div>
 
-      <div class="panel-section" v-if="pendingChanges">
+      <div class="panel-section" v-if="store.hasPendingChanges">
         <div class="pending-changes">
           <div class="pending-title">
-            ⚠️ 待应用修改: {{ pendingChangeCount }} 项
+            ⚠️ 待应用修改: {{ store.pendingChangeCount }} 项
           </div>
           <div class="pending-actions">
-            <button class="btn-primary" @click="applyAllChanges">
+            <button
+              class="btn-primary"
+              @click="applyAllChanges"
+              :disabled="store.computing"
+            >
               应用并重新计算
             </button>
-            <button class="btn-secondary" @click="cancelChanges">
+            <button class="btn-secondary" @click="store.clearPendingChanges()">
               取消
             </button>
           </div>
@@ -146,87 +174,74 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 import { useGridStore } from '../stores/grid'
 
 const store = useGridStore()
-
-const pendingGenChanges = ref(new Map())
-const pendingTapChanges = ref(new Map())
 
 const transformers = computed(() =>
   store.branches.filter(b => b.tap !== 1 || b.phaseShift !== 0)
 )
 
-const pendingChanges = computed(() =>
-  pendingGenChanges.value.size > 0 || pendingTapChanges.value.size > 0
-)
-
-const pendingChangeCount = computed(() =>
-  pendingGenChanges.value.size + pendingTapChanges.value.size
-)
-
-function getBranchIndex(branchId) {
-  return store.branches.findIndex(b => b.id === branchId)
-}
-
 function genCurrentPg(gen, idx) {
-  if (pendingGenChanges.value.has(idx)) {
-    return pendingGenChanges.value.get(idx)
-  }
+  const pending = store.pendingGenChanges[idx]
+  if (pending !== undefined) return pending
   const buses = store.solution?.buses || store.gridInfo?.buses || []
   const bus = buses.find(b => b.id === gen.busId)
   return bus?.Pg ?? gen.Pg
 }
 
-function trCurrentTap(tr, branchIdx) {
-  if (pendingTapChanges.value.has(branchIdx)) {
-    return pendingTapChanges.value.get(branchIdx)
-  }
+function trCurrentTap(tr, idx) {
+  const pending = store.pendingTapChanges[idx]
+  if (pending !== undefined) return pending
   return tr.tap
+}
+
+function onGenPowerInput(idx, gen, value) {
+  if (Math.abs(value - gen.Pg) < 0.01) {
+    store.removePendingGenChange(idx)
+  } else {
+    store.setPendingGenChange(idx, value)
+  }
 }
 
 function onGenPowerChange(idx, gen, value) {
   if (Math.abs(value - gen.Pg) < 0.01) {
-    pendingGenChanges.value.delete(idx)
-  } else {
-    pendingGenChanges.value.set(idx, value)
+    store.removePendingGenChange(idx)
+    return
   }
+  store.setPendingGenChange(idx, value)
+  store.debouncedSolveWithModifications(
+    [[idx, value]],
+    []
+  )
 }
 
-function onTapChange(branchIdx, tr, value) {
+function onTapInput(idx, tr, value) {
   if (Math.abs(value - tr.tap) < 0.001) {
-    pendingTapChanges.value.delete(branchIdx)
+    store.removePendingTapChange(idx)
   } else {
-    pendingTapChanges.value.set(branchIdx, value)
+    store.setPendingTapChange(idx, value)
   }
 }
 
-async function applyGenPowerChange(idx, gen, value) {
-  if (Math.abs(value - gen.Pg) < 0.01) return
-  const genChanges = [[idx, value]]
-  pendingGenChanges.value.delete(idx)
-  await store.solveWithModifications(genChanges, [])
-}
-
-async function applyTapChange(branchIdx, tr, value) {
-  if (Math.abs(value - tr.tap) < 0.001) return
-  const tapChanges = [[branchIdx, value]]
-  pendingTapChanges.value.delete(branchIdx)
-  await store.solveWithModifications([], tapChanges)
+function onTapChange(idx, tr, value) {
+  if (Math.abs(value - tr.tap) < 0.001) {
+    store.removePendingTapChange(idx)
+    return
+  }
+  store.setPendingTapChange(idx, value)
+  store.debouncedSolveWithModifications(
+    [],
+    [[idx, value]]
+  )
 }
 
 async function applyAllChanges() {
-  const genChanges = [...pendingGenChanges.value.entries()]
-  const tapChanges = [...pendingTapChanges.value.entries()]
-  pendingGenChanges.value.clear()
-  pendingTapChanges.value.clear()
+  const genChanges = Object.entries(store.pendingGenChanges).map(([k, v]) => [parseInt(k), v])
+  const tapChanges = Object.entries(store.pendingTapChanges).map(([k, v]) => [parseInt(k), v])
+  store.clearPendingChanges()
   await store.solveWithModifications(genChanges, tapChanges)
-}
-
-function cancelChanges() {
-  pendingGenChanges.value.clear()
-  pendingTapChanges.value.clear()
 }
 </script>
 
@@ -234,6 +249,50 @@ function cancelChanges() {
 .control-panel {
   height: 100%;
   overflow-y: auto;
+}
+
+.computation-status {
+  padding: 12px 16px;
+  background-color: rgba(59, 130, 246, 0.1);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.progress-bar-container {
+  width: 100%;
+  height: 4px;
+  background-color: var(--bg-tertiary);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.progress-bar {
+  height: 100%;
+  background-color: var(--accent);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.btn-cancel {
+  padding: 2px 10px;
+  font-size: 11px;
+  background-color: var(--danger);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-cancel:hover {
+  opacity: 0.85;
 }
 
 .panel-section {
@@ -408,5 +467,10 @@ function cancelChanges() {
   flex: 1;
   padding: 10px 12px;
   font-size: 13px;
+}
+
+.pending-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

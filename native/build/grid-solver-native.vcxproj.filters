@@ -1,0 +1,51 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="D:\SOLO-12\06-smart-grid-simulator\native\src\binding\GridSolverWrapper.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\SOLO-12\06-smart-grid-simulator\native\src\binding\main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\SOLO-12\06-smart-grid-simulator\native\src\core\CDFParser.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\SOLO-12\06-smart-grid-simulator\native\src\core\GridData.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\SOLO-12\06-smart-grid-simulator\native\src\solver\NewtonRaphsonSolver.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\SOLO-12\06-smart-grid-simulator\native\node_modules\cmake-js\lib\cpp\win_delay_load_hook.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="D:\SOLO-12\06-smart-grid-simulator\native\include\binding\GridSolverWrapper.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\SOLO-12\06-smart-grid-simulator\native\include\core\CDFParser.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\SOLO-12\06-smart-grid-simulator\native\include\core\GridData.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\SOLO-12\06-smart-grid-simulator\native\include\solver\ComputationGuard.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\SOLO-12\06-smart-grid-simulator\native\include\solver\NewtonRaphsonSolver.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\SOLO-12\06-smart-grid-simulator\native\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{9A120467-76A5-3750-B4A9-AADD608B1361}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{2967BAFC-01DB-34C5-A803-82CAC9A0CACC}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

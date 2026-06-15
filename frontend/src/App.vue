@@ -7,9 +7,14 @@
       </aside>
       <main class="canvas-area">
         <GridCanvas />
-        <div v-if="store.loading" class="loading-overlay">
+        <div v-if="store.loading || store.computing" class="loading-overlay">
           <div class="loading-spinner"></div>
           <p>{{ loadingText }}</p>
+          <div v-if="store.computationProgress" class="computation-detail">
+            迭代 {{ store.computationProgress.currentIteration }}/{{ store.computationProgress.maxIterations }}
+            · 失配 {{ store.computationProgress.maxMismatch?.toExponential(3) }}
+          </div>
+          <button v-if="store.computing" class="btn-cancel-overlay" @click="store.cancelComputation()">取消计算</button>
         </div>
       </main>
       <aside class="right-panel">
@@ -93,6 +98,26 @@ const loadingText = computed(() => {
 .loading-overlay p {
   color: var(--text-primary);
   font-size: 16px;
+}
+
+.computation-detail {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-family: 'Consolas', monospace;
+}
+
+.btn-cancel-overlay {
+  padding: 8px 24px;
+  background-color: var(--danger);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.btn-cancel-overlay:hover {
+  opacity: 0.85;
 }
 
 .loading-spinner {

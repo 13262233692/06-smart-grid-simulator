@@ -1,0 +1,10 @@
+^D:\SOLO-12\06-SMART-GRID-SIMULATOR\NATIVE\BUILD\CMAKEFILES\2ECEA7CBA6FB039961831E89D4C4AA52\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/SOLO-12/06-smart-grid-simulator/native -BD:/SOLO-12/06-smart-grid-simulator/native/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/SOLO-12/06-smart-grid-simulator/native/build/grid-solver-native.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

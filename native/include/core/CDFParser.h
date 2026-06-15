@@ -2,6 +2,11 @@
 #include "core/GridData.h"
 #include <string>
 #include <stdexcept>
+#include <istream>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 namespace GridSolver {
 
@@ -19,12 +24,11 @@ public:
     GridData parseString(const std::string& content);
 
 private:
-    void skipLines(std::ifstream& file, int count);
     std::string trim(const std::string& s);
 
     void parseTitleData(GridData& grid, const std::string& line);
-    void parseBusData(GridData& grid, std::ifstream& file);
-    void parseBranchData(GridData& grid, std::ifstream& file);
+    void parseBusData(GridData& grid, std::istream& stream);
+    void parseBranchData(GridData& grid, std::istream& stream);
 };
 
 } // namespace GridSolver

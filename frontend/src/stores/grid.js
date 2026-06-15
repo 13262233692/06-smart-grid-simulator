@@ -1,11 +1,15 @@
 import { defineStore } from 'pinia'
 
+let requestIdCounter = 0
+let debounceTimer = null
+const DEBOUNCE_MS = 300
+
 export const useGridStore = defineStore('grid', {
   state: () => ({
     gridInfo: null,
     solution: null,
-    solverRef: null,
     loading: false,
+    computing: false,
     error: null,
     busPositions: {},
     zoom: 1,
@@ -16,9 +20,14 @@ export const useGridStore = defineStore('grid', {
     showVoltages: true,
     solverConfig: {
       tolerance: 1e-6,
-      maxIterations: 50
+      maxIterations: 50,
+      timeoutMs: 30000
     },
-    modificationHistory: []
+    modificationHistory: [],
+    computationProgress: null,
+    lastRequestId: 0,
+    pendingGenChanges: {},
+    pendingTapChanges: {}
   }),
 
   getters: {
@@ -28,6 +37,15 @@ export const useGridStore = defineStore('grid', {
     branches: (state) => state.solution?.branches || state.gridInfo?.branches || [],
     generators: (state) => state.solution?.generators || state.gridInfo?.generators || [],
     branchFlows: (state) => state.solution?.branchFlows || [],
+    hasPendingChanges: (state) =>
+      Object.keys(state.pendingGenChanges).length > 0 || Object.keys(state.pendingTapChanges).length > 0,
+    pendingChangeCount: (state) =>
+      Object.keys(state.pendingGenChanges).length + Object.keys(state.pendingTapChanges).length,
+    progressPercent: (state) => {
+      if (!state.computationProgress) return 0
+      const p = state.computationProgress
+      return Math.round((p.currentIteration / p.maxIterations) * 100)
+    },
     statistics: (state) => {
       if (!state.gridInfo) return null
       return {
@@ -51,8 +69,9 @@ export const useGridStore = defineStore('grid', {
         const result = await window.electronAPI.grid.loadCDF(filePath)
         if (result.success) {
           this.gridInfo = result.data
-          this.solverRef = result
           this.solution = null
+          this.pendingGenChanges = {}
+          this.pendingTapChanges = {}
           this.generateBusPositions()
         } else {
           this.error = result.error || '加载失败'
@@ -80,7 +99,6 @@ export const useGridStore = defineStore('grid', {
 
       const total = sortedBuses.length
       const angleStep = total > 0 ? (2 * Math.PI) / total : 0
-      const radiusStep = radius / (total > 1 ? total - 1 : 1)
 
       sortedBuses.forEach((bus, index) => {
         const angle = index * angleStep - Math.PI / 2
@@ -94,18 +112,43 @@ export const useGridStore = defineStore('grid', {
       this.busPositions = positions
     },
 
+    async cancelComputation() {
+      try {
+        await window.electronAPI.grid.cancelComputation()
+      } catch (e) {
+        console.warn('Cancel failed:', e.message)
+      }
+      this.computing = false
+      this.computationProgress = null
+    },
+
     async solvePowerFlow() {
-      if (!this.solverRef) {
+      if (!this.isLoaded) {
         this.error = '请先加载电网数据'
         return { success: false, error: this.error }
       }
-      this.loading = true
+      if (this.computing) {
+        await this.cancelComputation()
+        await new Promise(r => setTimeout(r, 50))
+      }
+
+      const requestId = ++requestIdCounter
+      this.lastRequestId = requestId
+      this.computing = true
       this.error = null
+      this.computationProgress = null
+
+      const removeProgressListener = window.electronAPI.grid.onProgress((progress) => {
+        if (requestId === this.lastRequestId) {
+          this.computationProgress = progress
+        }
+      })
+
       try {
-        const result = await window.electronAPI.grid.solvePowerFlow(
-          this.solverRef,
-          this.solverConfig
-        )
+        const result = await window.electronAPI.grid.solvePowerFlow(this.solverConfig)
+        if (requestId !== this.lastRequestId) {
+          return { success: false, error: 'Superseded' }
+        }
         if (result.success) {
           this.solution = result.data
         } else {
@@ -116,24 +159,45 @@ export const useGridStore = defineStore('grid', {
         this.error = e.message
         return { success: false, error: e.message }
       } finally {
-        this.loading = false
+        removeProgressListener()
+        if (requestId === this.lastRequestId) {
+          this.computing = false
+          this.computationProgress = null
+        }
       }
     },
 
     async solveWithModifications(genChanges = [], tapChanges = []) {
-      if (!this.solverRef) {
+      if (!this.isLoaded) {
         this.error = '请先加载电网数据'
         return { success: false, error: this.error }
       }
-      this.loading = true
+      if (this.computing) {
+        await this.cancelComputation()
+        await new Promise(r => setTimeout(r, 50))
+      }
+
+      const requestId = ++requestIdCounter
+      this.lastRequestId = requestId
+      this.computing = true
       this.error = null
+      this.computationProgress = null
+
+      const removeProgressListener = window.electronAPI.grid.onProgress((progress) => {
+        if (requestId === this.lastRequestId) {
+          this.computationProgress = progress
+        }
+      })
+
       try {
         const result = await window.electronAPI.grid.solveWithModifications(
-          this.solverRef,
           this.solverConfig,
           genChanges,
           tapChanges
         )
+        if (requestId !== this.lastRequestId) {
+          return { success: false, error: 'Superseded' }
+        }
         if (result.success) {
           this.solution = result.data
           this.modificationHistory.push({
@@ -149,8 +213,48 @@ export const useGridStore = defineStore('grid', {
         this.error = e.message
         return { success: false, error: e.message }
       } finally {
-        this.loading = false
+        removeProgressListener()
+        if (requestId === this.lastRequestId) {
+          this.computing = false
+          this.computationProgress = null
+        }
       }
+    },
+
+    setPendingGenChange(idx, value) {
+      this.pendingGenChanges = { ...this.pendingGenChanges, [idx]: value }
+    },
+
+    setPendingTapChange(idx, value) {
+      this.pendingTapChanges = { ...this.pendingTapChanges, [idx]: value }
+    },
+
+    removePendingGenChange(idx) {
+      const copy = { ...this.pendingGenChanges }
+      delete copy[idx]
+      this.pendingGenChanges = copy
+    },
+
+    removePendingTapChange(idx) {
+      const copy = { ...this.pendingTapChanges }
+      delete copy[idx]
+      this.pendingTapChanges = copy
+    },
+
+    clearPendingChanges() {
+      this.pendingGenChanges = {}
+      this.pendingTapChanges = {}
+    },
+
+    debouncedSolveWithModifications(genChanges, tapChanges) {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      return new Promise((resolve) => {
+        debounceTimer = setTimeout(async () => {
+          debounceTimer = null
+          const result = await this.solveWithModifications(genChanges, tapChanges)
+          resolve(result)
+        }, DEBOUNCE_MS)
+      })
     },
 
     updateBusPosition(busId, x, y) {
@@ -183,11 +287,14 @@ export const useGridStore = defineStore('grid', {
     reset() {
       this.gridInfo = null
       this.solution = null
-      this.solverRef = null
       this.busPositions = {}
       this.selectedBus = null
       this.selectedBranch = null
       this.modificationHistory = []
+      this.pendingGenChanges = {}
+      this.pendingTapChanges = {}
+      this.computing = false
+      this.computationProgress = null
     }
   }
 })

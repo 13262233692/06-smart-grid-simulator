@@ -14,13 +14,36 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
   : RENDERER_DIST
 
 let win = null
+let activeSolver = null
 
-let gridSolver = null
+let GridSolverClass = null
 try {
   const nativePath = path.join(process.env.APP_ROOT, '..', 'native')
-  gridSolver = require(nativePath)
+  const nativeModule = require(nativePath)
+  GridSolverClass = nativeModule.GridSolver
 } catch (e) {
   console.warn('Native module not loaded:', e.message)
+}
+
+const DEFAULT_TIMEOUT_MS = 30000
+let computationTimeout = null
+
+function clearComputationTimeout() {
+  if (computationTimeout) {
+    clearTimeout(computationTimeout)
+    computationTimeout = null
+  }
+}
+
+function cancelActiveComputation() {
+  clearComputationTimeout()
+  if (activeSolver) {
+    try {
+      activeSolver.cancelComputation()
+    } catch (e) {
+      console.warn('Error cancelling computation:', e.message)
+    }
+  }
 }
 
 function createWindow() {
@@ -47,16 +70,19 @@ function createWindow() {
   }
 
   win.on('closed', () => {
+    cancelActiveComputation()
+    activeSolver = null
     win = null
   })
 }
 
 ipcMain.handle('grid:load-cdf', async (_event, filePath) => {
   try {
-    if (!gridSolver) throw new Error('Native solver module not available')
-    const solver = new gridSolver.GridSolver()
-    const result = await solver.loadCDF(filePath)
-    return { success: true, data: result, solverRef: solver }
+    if (!GridSolverClass) throw new Error('Native solver module not available')
+    cancelActiveComputation()
+    activeSolver = new GridSolverClass()
+    const result = activeSolver.loadCDF(filePath)
+    return { success: true, data: result }
   } catch (err) {
     return { success: false, error: err.message }
   }
@@ -76,34 +102,97 @@ ipcMain.handle('dialog:open-file', async () => {
   return { success: false, canceled: true }
 })
 
-ipcMain.handle('grid:solve-power-flow', async (_event, _solverRef, config) => {
+ipcMain.handle('grid:solve-power-flow', async (_event, config) => {
   try {
-    if (!gridSolver) throw new Error('Native solver module not available')
-    if (!_solverRef || !_solverRef.data) {
+    if (!GridSolverClass) throw new Error('Native solver module not available')
+    if (!activeSolver || !activeSolver.isGridLoaded()) {
       throw new Error('No grid data loaded')
     }
-    const solver = new gridSolver.GridSolver()
-    await solver.loadCDF(_solverRef.data.sourceFile)
-    const result = await solver.solvePowerFlow(config || {})
+    if (activeSolver.isComputing()) {
+      cancelActiveComputation()
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+
+    const timeoutMs = config?.timeoutMs || DEFAULT_TIMEOUT_MS
+
+    const result = await new Promise((resolve, reject) => {
+      clearComputationTimeout()
+      computationTimeout = setTimeout(() => {
+        cancelActiveComputation()
+        reject(new Error(`Computation timeout (${timeoutMs}ms)`))
+      }, timeoutMs + 5000)
+
+      activeSolver.solvePowerFlow(config || {}, (progress) => {
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('grid:computation-progress', progress)
+        }
+      }).then((data) => {
+        clearComputationTimeout()
+        resolve(data)
+      }).catch((err) => {
+        clearComputationTimeout()
+        reject(err)
+      })
+    })
+
     return { success: true, data: result }
   } catch (err) {
     return { success: false, error: err.message }
   }
 })
 
-ipcMain.handle('grid:solve-with-modifications', async (_event, _solverRef, config, genChanges, tapChanges) => {
+ipcMain.handle('grid:solve-with-modifications', async (_event, config, genChanges, tapChanges) => {
   try {
-    if (!gridSolver) throw new Error('Native solver module not available')
-    if (!_solverRef || !_solverRef.data) {
+    if (!GridSolverClass) throw new Error('Native solver module not available')
+    if (!activeSolver || !activeSolver.isGridLoaded()) {
       throw new Error('No grid data loaded')
     }
-    const solver = new gridSolver.GridSolver()
-    await solver.loadCDF(_solverRef.data.sourceFile)
-    const result = await solver.solveWithModifications(config || {}, genChanges || [], tapChanges || [])
+    if (activeSolver.isComputing()) {
+      cancelActiveComputation()
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+
+    const timeoutMs = config?.timeoutMs || DEFAULT_TIMEOUT_MS
+
+    const result = await new Promise((resolve, reject) => {
+      clearComputationTimeout()
+      computationTimeout = setTimeout(() => {
+        cancelActiveComputation()
+        reject(new Error(`Computation timeout (${timeoutMs}ms)`))
+      }, timeoutMs + 5000)
+
+      activeSolver.solveWithModifications(
+        config || {},
+        genChanges || [],
+        tapChanges || [],
+        (progress) => {
+          if (win && !win.isDestroyed()) {
+            win.webContents.send('grid:computation-progress', progress)
+          }
+        }
+      ).then((data) => {
+        clearComputationTimeout()
+        resolve(data)
+      }).catch((err) => {
+        clearComputationTimeout()
+        reject(err)
+      })
+    })
+
     return { success: true, data: result }
   } catch (err) {
     return { success: false, error: err.message }
   }
+})
+
+ipcMain.handle('grid:cancel-computation', async () => {
+  cancelActiveComputation()
+  return { success: true }
+})
+
+ipcMain.handle('grid:is-computing', async () => {
+  if (!activeSolver) return { success: true, computing: false }
+  return { success: true, computing: activeSolver.isComputing() }
 })
 
 ipcMain.handle('app:get-sample-data-path', async () => {
@@ -120,9 +209,14 @@ ipcMain.handle('app:get-sample-data-path', async () => {
 })
 
 app.on('window-all-closed', () => {
+  cancelActiveComputation()
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  cancelActiveComputation()
 })
 
 app.on('activate', () => {
